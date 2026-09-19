@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -86,11 +86,16 @@ class GraphDocument:
         commit: str,
         endpoint: str,
         model: str,
+        rss_check: Callable[[], None] | None = None,
     ) -> GraphDocument:
         prov = Provenance("stdlib_regex", model, endpoint)
         nodes: list[Node] = []
         edges: list[Edge] = []
+        if rss_check is not None:
+            rss_check()
         for fact in facts:
+            if rss_check is not None:
+                rss_check()
             jmap = fact.judgments.by_id()
             for c in fact.candidates.items:
                 j = jmap.get(c.id)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import time
+from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
@@ -175,7 +176,12 @@ class DecisionsEngine:
             items = self._bind(answers, frozenset(c.id for c in batch))
             return items, usage
 
-        parts = [run(b) for b in batches]
+        workers = max(1, int(self.config.concurrency))
+        if workers == 1 or len(batches) < 2:
+            parts = [run(b) for b in batches]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                parts = list(pool.map(run, batches))
         items: list[CandidateJudgment] = []
         usage = ZERO_USAGE
         for part_items, part_usage in parts:

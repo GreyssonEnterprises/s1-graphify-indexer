@@ -30,7 +30,11 @@ def _one_symbol() -> CandidateSet:
 
 
 def _engine(transport, **kwargs) -> DecisionsEngine:
-    cfg = EngineConfig(max_retries=kwargs.pop("max_retries", 3), timeout_s=5.0)
+    cfg = EngineConfig(
+        max_retries=kwargs.pop("max_retries", 3),
+        timeout_s=5.0,
+        concurrency=kwargs.pop("concurrency", 1),
+    )
     return DecisionsEngine(
         config=cfg,
         api_key="test-key",
@@ -173,3 +177,59 @@ def test_chunks_are_windows_not_whole_file():
     blob = json.dumps(chunks)
     assert "parse_config" in blob
     assert blob.count("# tail") < 50
+
+
+def _many_symbols(n: int) -> CandidateSet:
+    items = []
+    for i in range(n):
+        cid = CandidateId(f"symbol:pkg/f.py:fn{i}:{i}")
+        items.append(
+            Candidate(
+                id=cid,
+                kind="symbol",
+                name=f"fn{i}",
+                loc=SourceLoc("pkg/f.py", i + 1, i + 1),
+                extra={},
+            )
+        )
+    return CandidateSet("pkg/f.py", tuple(items))
+
+
+def test_concurrency_runs_batches_in_parallel():
+    import threading
+    import time
+
+    from s1_graphify.engine import _payload_chars, _questions_for, _windows_for
+
+    in_flight = 0
+    peak = {"n": 0}
+    lock = threading.Lock()
+
+    class Slow(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            nonlocal in_flight
+            with lock:
+                in_flight += 1
+                peak["n"] = max(peak["n"], in_flight)
+            try:
+                time.sleep(0.05)
+                with lock:
+                    return super().__call__(url, data, headers, timeout)
+            finally:
+                with lock:
+                    in_flight -= 1
+
+    one = _many_symbols(1).items[0]
+    one_sz = _payload_chars(
+        "typesafe/jev-1.13",
+        [one],
+        _windows_for([one], None, 8000),
+        _questions_for([one]),
+    )
+    t = Slow()
+    budget = Budget.default()
+    budget.max_state_chars = one_sz + 80
+    engine = _engine(t, concurrency=2)
+    engine.judge(_many_symbols(8), budget=budget)
+    assert len(t.calls) >= 2
+    assert peak["n"] >= 2

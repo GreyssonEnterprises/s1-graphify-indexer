@@ -101,6 +101,7 @@ def index_repo(
                 commit=_commit(repo),
                 endpoint=engine.config.url,
                 model=engine.config.model,
+                rss_check=lambda: budget.check_rss(reader),
             )
             doc.publish_atomic(out)
             if ckpt_path.exists():

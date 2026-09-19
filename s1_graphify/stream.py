@@ -71,14 +71,11 @@ def _iter_paths(repo: Path) -> Iterator[Path]:
             if path.is_file():
                 yield path
         return
-    found: list[Path] = []
     for root, dirs, files in os.walk(repo):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
         rootp = Path(root)
-        for name in files:
-            found.append(rootp / name)
-    found.sort()
-    yield from found
+        for name in sorted(files):
+            yield rootp / name
 
 
 def _git_ls(repo: Path) -> list[str] | None:

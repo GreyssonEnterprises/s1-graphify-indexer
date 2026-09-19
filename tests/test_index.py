@@ -57,6 +57,38 @@ def test_stream_is_bounded_not_corpus(tmp_path, monkeypatch):
     assert len(reads) == 20
 
 
+def test_walk_fallback_does_not_buffer_all_paths(tmp_path, monkeypatch):
+    import s1_graphify.stream as stream_mod
+
+    d1 = tmp_path / "a"
+    d2 = tmp_path / "z"
+    d1.mkdir()
+    d2.mkdir()
+    (d1 / "a.py").write_text("a=1\n")
+    (d2 / "z.py").write_text("z=1\n")
+    events: list[tuple[str, str]] = []
+    orig_walk = stream_mod.os.walk
+
+    def tracking_walk(*args, **kwargs):
+        for item in orig_walk(*args, **kwargs):
+            events.append(("walk", item[0]))
+            yield item
+
+    orig_read = Path.read_bytes
+
+    def spy_read(self, *a, **k):
+        events.append(("read", str(self)))
+        return orig_read(self, *a, **k)
+
+    monkeypatch.setattr(stream_mod.os, "walk", tracking_walk)
+    monkeypatch.setattr(Path, "read_bytes", spy_read)
+    first = next(iter(stream_sources(tmp_path, Budget.default())))
+    assert first.path == "a/a.py"
+    walked = {Path(p).name for kind, p in events if kind == "walk"}
+    assert "a" in walked
+    assert "z" not in walked
+
+
 def test_skip_dirs_use_relative_parts(tmp_path):
     repo = tmp_path / "build" / "proj"
     repo.mkdir(parents=True)
@@ -222,6 +254,49 @@ def test_report_accounts_requests_retries_usage(tmp_path):
     assert "0.000013" in report or "cost" in report.lower()
     assert "rss" in report.lower()
     assert "request" in report.lower()
+
+
+def test_rss_abort_during_graph_assembly(tmp_path):
+    import traceback
+
+    (tmp_path / "a.py").write_text("def a():\n    return 1\n")
+    out = tmp_path / "out"
+
+    def reader():
+        if "from_facts" in "".join(traceback.format_stack()):
+            return 10_000
+        return 10
+
+    budget = Budget.default()
+    budget.max_rss_bytes = 100
+    index_repo(tmp_path, out, _engine(ScriptedTransport()), budget, rss_reader=reader)
+    assert not (out / "graph.json").exists()
+    report = (out / "INDEX_REPORT.md").read_text().lower()
+    assert "abort" in report
+    assert "rss" in report
+
+
+def test_from_facts_rss_check_aborts():
+    from s1_graphify.engine import CandidateJudgment, Judgments, ZERO_USAGE
+    from s1_graphify.extract import Candidate, CandidateId, CandidateSet, SourceLoc
+    from s1_graphify.graph import FileFacts, GraphDocument
+
+    cid = CandidateId("symbol:a.py:a:1")
+    cand = Candidate(cid, "symbol", "a", SourceLoc("a.py", 1, 1), {})
+    judged = CandidateJudgment(cid, True, 0.9, 2.0, 0.8, "symbol")
+
+    def boom():
+        raise BudgetExceeded("rss", "assembly")
+
+    with pytest.raises(BudgetExceeded) as ei:
+        GraphDocument.from_facts(
+            [FileFacts("a.py", CandidateSet("a.py", (cand,)), Judgments((judged,), ZERO_USAGE))],
+            commit="abc",
+            endpoint="https://example",
+            model="typesafe/jev-1.13",
+            rss_check=boom,
+        )
+    assert ei.value.kind == "rss"
 
 
 def test_role_cannot_reclassify_extractor_kind():

@@ -8,8 +8,10 @@ s1-graphify-indexer talks to a System One Decisions HTTP API. It does not call c
 
 Headers:
 
-- `Authorization: Bearer <key>`
-- `Content-Type: application/json`
+```
+Authorization: Bearer <api-key>
+Content-Type: application/json
+```
 
 Body:
 
@@ -107,6 +109,6 @@ Retry sleep is exponential and injectable in tests.
 
 ## Caps
 
-The indexer bounds file bytes, chunk count, request `state` size, and process RSS while streaming. It does not load the whole corpus into memory. Graph output is written to a temp file and renamed only after a complete successful run.
+The indexer bounds file bytes, chunk count, request `state` size, and process RSS while streaming, judging, and assembling. It does not load the whole corpus into memory. Graph output is written to a temp file and renamed only after a complete successful run.
 
 On abort the indexer writes `INDEX_REPORT.md` and `checkpoint.json`. It does not publish `graph.json`.
