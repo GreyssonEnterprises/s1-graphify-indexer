@@ -1,0 +1,13 @@
+{
+  "repo": "tests/fixtures/toy",
+  "questions": [
+    {
+      "question": "where is parse_config defined?",
+      "expect_names": ["parse_config"]
+    },
+    {
+      "question": "where is load_user defined?",
+      "expect_names": ["load_user"]
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from s1_graphify.budget import Budget, BudgetExceeded
+from s1_graphify.config import EngineConfig
+from s1_graphify.engine import DecisionsEngine
+from s1_graphify.extract import SourceText, extract_candidates
+from s1_graphify.index import index_repo
+from s1_graphify.stream import stream_sources
+from tests.conftest import ScriptedTransport, TOY
+
+
+def _engine(transport) -> DecisionsEngine:
+    return DecisionsEngine(
+        config=EngineConfig(max_retries=3),
+        api_key="test-key",
+        transport=transport,
+        sleeper=transport.sleeper,
+    )
+
+
+def test_extract_does_not_invent_files():
+    text = (TOY / "pkg" / "user.py").read_text()
+    source = SourceText(path="pkg/user.py", text=text, size_bytes=len(text.encode()))
+    found = extract_candidates(source)
+    assert all(c.loc.path == "pkg/user.py" for c in found.items)
+    file_paths = {c.loc.path for c in found.items if c.kind == "file"}
+    assert file_paths == {"pkg/user.py"}
+    names = {c.name for c in found.items}
+    assert "load_user" in names
+    assert "parse_config" in names
+    assert not any(c.kind == "file" and "config.py" in c.loc.path for c in found.items)
+
+
+def test_stream_is_bounded_not_corpus(tmp_path, monkeypatch):
+    for i in range(20):
+        (tmp_path / f"f{i}.py").write_text(f"x{i}=1\n")
+    reads: list[str] = []
+    orig = Path.read_bytes
+
+    def spy(self, *a, **k):
+        reads.append(str(self))
+        return orig(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_bytes", spy)
+    it = stream_sources(tmp_path, Budget.default())
+    first = next(it)
+    assert first.text
+    assert len(reads) == 1
+    rest = list(it)
+    assert len(rest) == 19
+    assert len(reads) == 20
+
+
+def test_file_cap_aborts(tmp_path):
+    (tmp_path / "big.py").write_bytes(b"x" * 500)
+    budget = Budget.default()
+    budget.max_file_bytes = 100
+    with pytest.raises(BudgetExceeded) as ei:
+        list(stream_sources(tmp_path, budget))
+    assert ei.value.kind == "file_size"
+
+
+def test_chunk_cap_aborts(tmp_path):
+    (tmp_path / "wide.py").write_text("a" * 50)
+    budget = Budget.default()
+    budget.max_chunk_chars = 10
+    budget.max_chunks = 2
+    with pytest.raises(BudgetExceeded) as ei:
+        list(stream_sources(tmp_path, budget))
+    assert ei.value.kind in {"chunk", "chunks"}
+
+
+def test_rss_abort(tmp_path):
+    (tmp_path / "a.py").write_text("def a():\n    return 1\n")
+    out = tmp_path / "out"
+    out.mkdir()
+    t = ScriptedTransport()
+    budget = Budget.default()
+    budget.max_rss_bytes = 100
+    index_repo(tmp_path, out, _engine(t), budget, rss_reader=lambda: 10_000)
+    assert not (out / "graph.json").exists()
+    assert (out / "INDEX_REPORT.md").exists()
+    assert (out / "checkpoint.json").exists()
+
+
+def test_atomic_publish_success(tmp_path):
+    out = tmp_path / "out"
+    t = ScriptedTransport()
+    index_repo(TOY, out, _engine(t), Budget.default())
+    graph_path = out / "graph.json"
+    assert graph_path.exists()
+    data = json.loads(graph_path.read_text())
+    assert data["status"] == "complete"
+    assert data["nodes"]
+    names = {n["name"] for n in data["nodes"]}
+    assert "parse_config" in names
+    assert "load_user" in names
+
+
+def test_abort_writes_report_and_checkpoint_not_graph(tmp_path):
+    (tmp_path / "a.py").write_text("def a():\n    return 1\n")
+    out = tmp_path / "out"
+    out.mkdir()
+    t = ScriptedTransport()
+    budget = Budget.default()
+    budget.max_rss_bytes = 1
+    index_repo(tmp_path, out, _engine(t), budget, rss_reader=lambda: 999)
+    assert not (out / "graph.json").exists()
+    assert (out / "INDEX_REPORT.md").exists()
+    assert (out / "checkpoint.json").exists()
+    report = (out / "INDEX_REPORT.md").read_text()
+    assert "abort" in report.lower() or "rss" in report.lower()
+
+
+def test_checkpoint_resume_skips_done_paths(tmp_path):
+    (tmp_path / "one.py").write_text("def one():\n    return 1\n")
+    (tmp_path / "two.py").write_text("def two():\n    return 2\n")
+    out = tmp_path / "out"
+    judged: list[str] = []
+
+    class Counting(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            body = json.loads(data.decode() if isinstance(data, bytes) else data)
+            state = body.get("state")
+            blob = json.dumps(state)
+            if "def two" in blob or "two.py" in blob:
+                raise TimeoutError("stop on two")
+            judged.append(blob)
+            return super().__call__(url, data, headers, timeout)
+
+    t = Counting()
+    budget = Budget.default()
+    index_repo(tmp_path, out, _engine(t), budget)
+    assert not (out / "graph.json").exists()
+    first_calls = len(t.calls)
+
+    t2 = ScriptedTransport()
+    index_repo(tmp_path, out, _engine(t2), Budget.default())
+    assert (out / "graph.json").exists()
+    resumed = json.dumps([c["body"] for c in t2.calls])
+    assert "one.py" not in resumed
+    assert "two.py" in resumed
+    assert first_calls >= 1
+
+
+def test_report_accounts_requests_retries_usage(tmp_path):
+    out = tmp_path / "out"
+    t = ScriptedTransport(script=[429])
+    index_repo(TOY, out, _engine(t), Budget.default())
+    report = (out / "INDEX_REPORT.md").read_text()
+    assert "312" in report or "input" in report.lower()
+    assert "retries" in report.lower()
+    assert "0.000013" in report or "cost" in report.lower()
+    assert "rss" in report.lower()
+    assert "request" in report.lower()
