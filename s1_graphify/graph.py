@@ -89,8 +89,23 @@ class GraphDocument:
         rss_check: Callable[[], None] | None = None,
     ) -> GraphDocument:
         prov = Provenance("stdlib_regex", model, endpoint)
-        nodes: list[Node] = []
+        nodes: dict[str, Node] = {}
         edges: list[Edge] = []
+        seen_edge_ids: set[str] = set()
+
+        def add_node(node: Node) -> None:
+            if node.id.value not in nodes:
+                nodes[node.id.value] = node
+
+        def ensure_endpoint(cid: CandidateId, loc: SourceLoc, confidence: float) -> None:
+            if cid.value in nodes:
+                return
+            if cid.value.startswith("file:"):
+                kind: Literal["file", "symbol"] = "file"
+            else:
+                kind = "symbol"
+            add_node(Node(cid, kind, _endpoint_name(cid), loc, confidence, prov))
+
         if rss_check is not None:
             rss_check()
         for fact in facts:
@@ -101,25 +116,40 @@ class GraphDocument:
                 j = jmap.get(c.id)
                 if j is None or not j.keep:
                     continue
-                kind = c.kind
-                if kind in NODE_KINDS:
-                    nodes.append(
-                        Node(c.id, kind, c.name, c.loc, j.confidence, prov)  # type: ignore[arg-type]
+                if c.kind in NODE_KINDS:
+                    add_node(
+                        Node(c.id, c.kind, c.name, c.loc, j.confidence, prov)  # type: ignore[arg-type]
                     )
-                elif kind in EDGE_KINDS:
-                    src = CandidateId(c.extra.get("src") or c.id.value)
-                    dst = CandidateId(c.extra.get("dst") or c.id.value)
-                    edges.append(
-                        Edge(c.id, kind, src, dst, c.loc, j.confidence, prov)  # type: ignore[arg-type]
-                    )
-        return GraphDocument(
+        for fact in facts:
+            jmap = fact.judgments.by_id()
+            for c in fact.candidates.items:
+                j = jmap.get(c.id)
+                if j is None or not j.keep:
+                    continue
+                if c.kind not in EDGE_KINDS:
+                    continue
+                if c.id.value in seen_edge_ids:
+                    continue
+                seen_edge_ids.add(c.id.value)
+                src = CandidateId(c.extra.get("src") or c.id.value)
+                dst = CandidateId(c.extra.get("dst") or c.id.value)
+                ensure_endpoint(src, c.loc, j.confidence)
+                ensure_endpoint(dst, c.loc, j.confidence)
+                edges.append(
+                    Edge(c.id, c.kind, src, dst, c.loc, j.confidence, prov)  # type: ignore[arg-type]
+                )
+        doc = GraphDocument(
             commit=commit,
             endpoint=endpoint,
             model=model,
             status="complete",
-            nodes=tuple(nodes),
+            nodes=tuple(nodes.values()),
             edges=tuple(edges),
         )
+        problems = integrity_problems(doc)
+        if problems:
+            raise ValueError(f"graph integrity: {problems}")
+        return doc
 
     @staticmethod
     def load(path: Path) -> GraphDocument:
@@ -156,6 +186,34 @@ class GraphDocument:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, final)
+
+
+def _endpoint_name(cid: CandidateId) -> str:
+    val = cid.value
+    if val.startswith("name:"):
+        return val[len("name:"):]
+    if val.startswith("file:"):
+        return val.split(":", 1)[-1].rsplit("/", 1)[-1] or val
+    parts = val.split(":")
+    if len(parts) >= 3:
+        return parts[2]
+    return parts[-1]
+
+
+def integrity_problems(doc: GraphDocument) -> tuple[str, ...]:
+    problems: list[str] = []
+    node_ids = [n.id.value for n in doc.nodes]
+    if len(node_ids) != len(set(node_ids)):
+        problems.append("duplicate_node_ids")
+    edge_ids = [e.id.value for e in doc.edges]
+    if len(edge_ids) != len(set(edge_ids)):
+        problems.append("duplicate_edge_ids")
+    nodes = set(node_ids)
+    if any(e.src.value not in nodes for e in doc.edges):
+        problems.append("missing_src")
+    if any(e.dst.value not in nodes for e in doc.edges):
+        problems.append("missing_dst")
+    return tuple(problems)
 
 
 def _node_dict(n: Node) -> dict:

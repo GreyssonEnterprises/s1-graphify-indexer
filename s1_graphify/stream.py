@@ -17,7 +17,13 @@ BIN_EXT = {
     ".tar", ".whl", ".so", ".dylib", ".dll", ".exe", ".bin", ".pyc", ".pyo",
     ".class", ".o", ".a", ".woff", ".woff2", ".ttf", ".eot",
 }
-SOURCE_EXT = {".py", ".pyi"}
+SOURCE_EXT = {
+    ".py", ".pyi",
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts",
+    ".go", ".rs", ".swift", ".kt", ".kts",
+    ".c", ".h", ".cc", ".cpp", ".hpp", ".cs",
+    ".java", ".rb", ".php",
+}
 
 
 def stream_sources(

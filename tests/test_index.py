@@ -37,6 +37,31 @@ def test_extract_does_not_invent_files():
     assert not any(c.kind == "symbol" and c.name == "parse_config" for c in found.items)
 
 
+def test_stream_includes_typescript(tmp_path):
+    (tmp_path / "cli.ts").write_text("export function createCli() {}\n")
+    (tmp_path / "x.py").write_text("def x():\n    return 1\n")
+    paths = {s.path for s in stream_sources(tmp_path, Budget.default())}
+    assert "cli.ts" in paths
+    assert "x.py" in paths
+
+
+def test_index_mixed_languages_is_integral(tmp_path):
+    from s1_graphify.graph import GraphDocument, integrity_problems
+
+    (tmp_path / "cli.ts").write_text(
+        "export function createCli() {\n  parseArgs();\n}\n"
+    )
+    (tmp_path / "x.py").write_text("def x():\n    return 1\n")
+    out = tmp_path / "out"
+    index_repo(tmp_path, out, _engine(ScriptedTransport()), Budget.default())
+    doc = GraphDocument.load(out / "graph.json")
+    paths = {n.loc.path for n in doc.nodes}
+    assert "cli.ts" in paths
+    assert "x.py" in paths
+    assert any(n.name == "createCli" for n in doc.nodes)
+    assert integrity_problems(doc) == ()
+
+
 def test_stream_is_bounded_not_corpus(tmp_path, monkeypatch):
     for i in range(20):
         (tmp_path / f"f{i}.py").write_text(f"x{i}=1\n")
@@ -319,6 +344,6 @@ def test_role_cannot_reclassify_extractor_kind():
         endpoint="https://example",
         model="typesafe/jev-1.13",
     )
-    assert doc.nodes == ()
+    assert not any(n.id == cid for n in doc.nodes)
     assert len(doc.edges) == 1
     assert doc.edges[0].kind == "call"
