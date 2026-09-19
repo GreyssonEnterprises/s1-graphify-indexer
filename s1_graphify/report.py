@@ -27,19 +27,12 @@ class Checkpoint:
         return frozenset(f.path for f in self.facts)
 
     def save_atomic(self, path: Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".tmp")
         payload = json.dumps({
             "repo": self.repo,
             "commit": self.commit,
             "facts": [f.to_dict() for f in self.facts],
         })
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(payload)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        _atomic_write(path, payload)
 
     @staticmethod
     def load(path: Path) -> Checkpoint | None:
@@ -88,7 +81,18 @@ class IndexReport:
         if self.abort:
             lines.append(f"abort_reason: {self.abort.reason}")
             lines.append(f"abort_message: {self.abort.message}")
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _atomic_write(path, "\n".join(lines) + "\n")
+
+
+def _atomic_write(path: Path, payload: str) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def percentile(xs: tuple[float, ...] | list[float], p: float) -> float:

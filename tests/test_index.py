@@ -171,6 +171,47 @@ def test_checkpoint_resume_skips_done_paths(tmp_path):
     assert first_calls >= 1
 
 
+def test_report_write_is_atomic(tmp_path, monkeypatch):
+    import os
+
+    from s1_graphify.report import IndexReport
+
+    replaced: list[tuple[str, str]] = []
+    fsynced: list[int] = []
+    real_replace = os.replace
+    real_fsync = os.fsync
+
+    def spy_replace(src, dst):
+        replaced.append((Path(src).name, Path(dst).name))
+        return real_replace(src, dst)
+
+    def spy_fsync(fd):
+        fsynced.append(fd)
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    monkeypatch.setattr(os, "fsync", spy_fsync)
+    path = tmp_path / "INDEX_REPORT.md"
+    IndexReport(
+        wall_s=1.0,
+        files=1,
+        chunks=1,
+        requests=1,
+        latency_ms_p50=1.0,
+        latency_ms_p95=1.0,
+        input_tokens=10,
+        cost=None,
+        peak_rss_bytes=1,
+        retries=0,
+        abort=None,
+    ).write_md(path)
+    assert replaced == [("INDEX_REPORT.md.tmp", "INDEX_REPORT.md")]
+    assert fsynced
+    assert path.exists()
+    assert not (tmp_path / "INDEX_REPORT.md.tmp").exists()
+    assert "status: complete" in path.read_text()
+
+
 def test_report_accounts_requests_retries_usage(tmp_path):
     out = tmp_path / "out"
     t = ScriptedTransport(script=[429])
