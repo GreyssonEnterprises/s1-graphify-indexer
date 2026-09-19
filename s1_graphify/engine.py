@@ -6,13 +6,12 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from s1_graphify.budget import Budget, BudgetExceeded
 from s1_graphify.config import EngineConfig, MissingKeyError
-from s1_graphify.extract import Candidate, CandidateId, CandidateSet, SourceLoc
+from s1_graphify.extract import Candidate, CandidateId, CandidateSet, SourceLoc, SourceText
 
 
 class MalformedResponseError(Exception):
@@ -155,28 +154,20 @@ class DecisionsEngine:
         candidates: CandidateSet,
         *,
         budget: Budget,
-        chunks: list | None = None,
+        source: SourceText | None = None,
     ) -> Judgments:
-        batches = self._pack(candidates, budget=budget)
+        batches = self._pack(candidates, budget=budget, source=source)
         if not batches:
             return Judgments((), ZERO_USAGE)
 
-        def run(batch: tuple[Candidate, ...]) -> tuple[tuple[CandidateJudgment, ...], Usage]:
+        def run(
+            packed: tuple[tuple[Candidate, ...], list, dict],
+        ) -> tuple[tuple[CandidateJudgment, ...], Usage]:
+            batch, chunks, questions = packed
             state = {
-                "candidates": [
-                    {
-                        "id": c.id.value,
-                        "kind": c.kind,
-                        "name": c.name,
-                        "path": c.loc.path,
-                        "start_line": c.loc.start_line,
-                        "end_line": c.loc.end_line,
-                    }
-                    for c in batch
-                ],
-                "chunks": chunks if chunks is not None else [_candidate_line(c) for c in batch],
+                "candidates": [_candidate_dict(c) for c in batch],
+                "chunks": chunks,
             }
-            questions = _questions_for(batch)
             payload, usage = self._decide(state, questions)
             answers = payload.get("answers")
             if not isinstance(answers, dict):
@@ -184,11 +175,7 @@ class DecisionsEngine:
             items = self._bind(answers, frozenset(c.id for c in batch))
             return items, usage
 
-        if len(batches) == 1 or self.config.concurrency <= 1:
-            parts = [run(b) for b in batches]
-        else:
-            with ThreadPoolExecutor(max_workers=self.config.concurrency) as pool:
-                parts = list(pool.map(run, batches))
+        parts = [run(b) for b in batches]
         items: list[CandidateJudgment] = []
         usage = ZERO_USAGE
         for part_items, part_usage in parts:
@@ -204,7 +191,6 @@ class DecisionsEngine:
                 for h in hits
             ],
         }
-        budget.charge_state(len(json.dumps(state)))
         questions: dict[str, object] = {
             "sufficient": {
                 "type": "noul",
@@ -218,6 +204,7 @@ class DecisionsEngine:
                 "instructions": "keep or drop this hit for the question",
                 "criteria": {"keep": "relevant", "drop": "irrelevant"},
             }
+        budget.charge_state(len(json.dumps({"state": state, "questions": questions})))
         payload, usage = self._decide(state, questions)
         answers = payload.get("answers")
         if not isinstance(answers, dict):
@@ -299,25 +286,40 @@ class DecisionsEngine:
             raise EngineTimeoutError("timeout") from last_timeout
         raise EngineHttpError(last_status)
 
-    def _pack(self, candidates: CandidateSet, *, budget: Budget) -> list[tuple[Candidate, ...]]:
-        batches: list[tuple[Candidate, ...]] = []
+    def _pack(
+        self,
+        candidates: CandidateSet,
+        *,
+        budget: Budget,
+        source: SourceText | None = None,
+    ) -> list[tuple[tuple[Candidate, ...], list, dict]]:
+        batches: list[tuple[tuple[Candidate, ...], list, dict]] = []
         current: list[Candidate] = []
-        current_size = 0
         for c in candidates.items:
-            line = _candidate_line(c)
-            sz = len(line)
+            trial = current + [c]
+            chunks = _windows_for(trial, source, budget.max_chunk_chars)
+            questions = _questions_for(trial)
+            sz = _payload_chars(self.config.model, trial, chunks, questions)
             if sz > budget.max_state_chars:
-                raise BudgetExceeded("state", f"{sz} > {budget.max_state_chars}")
-            if current and current_size + sz > budget.max_state_chars:
-                budget.charge_state(current_size)
-                batches.append(tuple(current))
-                current = []
-                current_size = 0
-            current.append(c)
-            current_size += sz
+                if not current:
+                    raise BudgetExceeded("state", f"{sz} > {budget.max_state_chars}")
+                packed = _windows_for(current, source, budget.max_chunk_chars)
+                packed_q = _questions_for(current)
+                budget.charge_state(_payload_chars(self.config.model, current, packed, packed_q))
+                batches.append((tuple(current), packed, packed_q))
+                current = [c]
+                chunks = _windows_for(current, source, budget.max_chunk_chars)
+                questions = _questions_for(current)
+                sz = _payload_chars(self.config.model, current, chunks, questions)
+                if sz > budget.max_state_chars:
+                    raise BudgetExceeded("state", f"{sz} > {budget.max_state_chars}")
+            else:
+                current = trial
         if current:
-            budget.charge_state(current_size)
-            batches.append(tuple(current))
+            chunks = _windows_for(current, source, budget.max_chunk_chars)
+            questions = _questions_for(current)
+            budget.charge_state(_payload_chars(self.config.model, current, chunks, questions))
+            batches.append((tuple(current), chunks, questions))
         return batches
 
     def _bind(
@@ -361,6 +363,67 @@ class DecisionsEngine:
                 CandidateJudgment(known_vals[cid_s], keep, noul, salience, conf, role_s)
             )
         return tuple(items)
+
+
+def _candidate_dict(c: Candidate) -> dict:
+    return {
+        "id": c.id.value,
+        "kind": c.kind,
+        "name": c.name,
+        "path": c.loc.path,
+        "start_line": c.loc.start_line,
+        "end_line": c.loc.end_line,
+    }
+
+
+def _payload_chars(model: str, batch: Sequence[Candidate], chunks: list, questions: dict) -> int:
+    return len(json.dumps({
+        "model": model,
+        "state": {"candidates": [_candidate_dict(c) for c in batch], "chunks": chunks},
+        "questions": questions,
+    }))
+
+
+def _windows_for(
+    batch: Sequence[Candidate],
+    source: SourceText | None,
+    max_chars: int,
+) -> list:
+    if source is None:
+        return [
+            {"path": c.loc.path, "start_line": c.loc.start_line, "text": _candidate_line(c)}
+            for c in batch
+        ]
+    lines = source.text.splitlines() or [""]
+    spans: list[tuple[int, int]] = []
+    for c in batch:
+        if c.kind == "file":
+            acc = 0
+            end = 1
+            for i, line in enumerate(lines, 1):
+                acc += len(line) + 1
+                end = i
+                if acc >= max_chars:
+                    break
+            spans.append((1, end))
+            continue
+        start = max(1, c.loc.start_line - 2)
+        end = min(len(lines), c.loc.end_line + 2)
+        spans.append((start, end))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    windows = []
+    for start, end in merged:
+        text = "\n".join(lines[start - 1 : end])
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        windows.append({"path": source.path, "start_line": start, "text": text})
+    return windows
 
 
 def _candidate_line(c: Candidate) -> str:

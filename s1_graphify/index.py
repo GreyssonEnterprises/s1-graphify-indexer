@@ -83,11 +83,7 @@ def index_repo(
             budget.check_rss(reader)
             files += 1
             cset = extract_candidates(source)
-            judged = engine.judge(
-                cset,
-                budget=budget,
-                chunks=[{"path": source.path, "start_line": 1, "text": source.text}],
-            )
+            judged = engine.judge(cset, budget=budget, source=source)
             latencies.extend(judged.usage.latencies_ms)
             request_count += judged.usage.requests
             retries += judged.usage.retries
@@ -96,15 +92,19 @@ def index_repo(
                 cost = (cost or 0.0) + float(judged.usage.cost)
             facts.append(FileFacts(source.path, cset, judged))
             Checkpoint(str(repo), _commit(repo), tuple(facts)).save_atomic(ckpt_path)
-        doc = GraphDocument.from_facts(
-            facts,
-            commit=_commit(repo),
-            endpoint=engine.config.url,
-            model=engine.config.model,
-        )
-        doc.publish_atomic(out)
-        if ckpt_path.exists():
-            ckpt_path.unlink()
+        if not facts:
+            abort = AbortDetail("budget", "no source files judged")
+            Checkpoint(str(repo), _commit(repo), tuple(facts)).save_atomic(ckpt_path)
+        else:
+            doc = GraphDocument.from_facts(
+                facts,
+                commit=_commit(repo),
+                endpoint=engine.config.url,
+                model=engine.config.model,
+            )
+            doc.publish_atomic(out)
+            if ckpt_path.exists():
+                ckpt_path.unlink()
     except (
         BudgetExceeded,
         EngineHttpError,

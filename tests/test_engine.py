@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from s1_graphify.budget import Budget
@@ -137,3 +139,37 @@ def test_state_cap_aborts():
         engine.judge(_one_symbol(), budget=budget)
     assert ei.value.kind == "state"
     assert t.calls == []
+
+
+def test_state_cap_counts_serialized_payload_not_candidate_lines():
+    from s1_graphify.budget import BudgetExceeded
+    from s1_graphify.extract import SourceText, extract_candidates
+
+    text = "def parse_config(path):\n    return path\n" + ("# pad\n" * 400)
+    source = SourceText("pkg/config.py", text, len(text.encode()))
+    cset = extract_candidates(source)
+    t = ScriptedTransport()
+    budget = Budget.default()
+    budget.max_state_chars = 500
+    budget.max_chunk_chars = 8000
+    with pytest.raises(BudgetExceeded) as ei:
+        _engine(t).judge(cset, budget=budget, source=source)
+    assert ei.value.kind == "state"
+    assert t.calls == []
+
+
+def test_chunks_are_windows_not_whole_file():
+    from s1_graphify.extract import SourceText, extract_candidates
+
+    text = "def parse_config(path):\n    return path\n" + ("# tail\n" * 3000)
+    source = SourceText("pkg/config.py", text, len(text.encode()))
+    cset = extract_candidates(source)
+    t = ScriptedTransport()
+    budget = Budget.default()
+    budget.max_chunk_chars = 80
+    _engine(t).judge(cset, budget=budget, source=source)
+    assert t.calls
+    chunks = t.calls[0]["body"]["state"]["chunks"]
+    blob = json.dumps(chunks)
+    assert "parse_config" in blob
+    assert blob.count("# tail") < 50

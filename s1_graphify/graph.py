@@ -96,7 +96,7 @@ class GraphDocument:
                 j = jmap.get(c.id)
                 if j is None or not j.keep:
                     continue
-                kind = j.role if j.role in NODE_KINDS | EDGE_KINDS else c.kind
+                kind = c.kind
                 if kind in NODE_KINDS:
                     nodes.append(
                         Node(c.id, kind, c.name, c.loc, j.confidence, prov)  # type: ignore[arg-type]

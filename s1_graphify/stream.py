@@ -17,10 +17,7 @@ BIN_EXT = {
     ".tar", ".whl", ".so", ".dylib", ".dll", ".exe", ".bin", ".pyc", ".pyo",
     ".class", ".o", ".a", ".woff", ".woff2", ".ttf", ".eot",
 }
-SOURCE_EXT = {
-    ".py", ".pyi", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".rb",
-    ".c", ".h", ".cpp", ".cc", ".cs", ".kt", ".swift", ".php", ".scala",
-}
+SOURCE_EXT = {".py", ".pyi"}
 
 
 def stream_sources(
@@ -39,7 +36,7 @@ def stream_sources(
         rel = path.relative_to(repo).as_posix()
         if rel in skip:
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
+        if any(part in SKIP_DIRS for part in Path(rel).parts):
             continue
         if path.name in {"graph.json", "INDEX_REPORT.md", "checkpoint.json"}:
             continue

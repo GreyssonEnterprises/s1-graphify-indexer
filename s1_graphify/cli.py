@@ -100,11 +100,16 @@ def _engine(args: argparse.Namespace) -> DecisionsEngine:
 
 def _budget(args: argparse.Namespace) -> Budget:
     caps = Caps.from_env()
+    state_chars = caps.max_state_chars
+    if getattr(args, "batch_chars", None) is not None:
+        state_chars = args.batch_chars
+    elif getattr(args, "max_state_chars", None) is not None:
+        state_chars = args.max_state_chars
     return Budget(
         max_file_bytes=_or(args, "max_file_bytes", caps.max_file_bytes),
         max_chunk_chars=_or(args, "max_chunk_chars", caps.max_chunk_chars),
         max_chunks=_or(args, "max_chunks", caps.max_chunks),
-        max_state_chars=_or(args, "max_state_chars", caps.max_state_chars),
+        max_state_chars=state_chars,
         max_rss_bytes=_or(args, "max_rss_bytes", caps.max_rss_bytes),
     )
 

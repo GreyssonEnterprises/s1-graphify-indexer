@@ -101,7 +101,6 @@ def extract_candidates(source: SourceText) -> CandidateSet:
                 iid = _mint_id(f"import:{path}:{name}:{i}")
                 extra = {"src": file_id.value, "dst": f"name:{name}"}
                 items.append(Candidate(iid, "import", name, loc, extra))
-                items.append(Candidate(_mint_id(f"symbol:{path}:{name}:{i}"), "symbol", name, loc, {}))
                 rid = _mint_id(f"relation:{path}:{Path(path).name}:{name}:{i}")
                 items.append(Candidate(rid, "relation", f"{Path(path).name}->{name}", loc, extra))
             continue

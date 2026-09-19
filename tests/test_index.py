@@ -34,6 +34,7 @@ def test_extract_does_not_invent_files():
     assert "load_user" in names
     assert "parse_config" in names
     assert not any(c.kind == "file" and "config.py" in c.loc.path for c in found.items)
+    assert not any(c.kind == "symbol" and c.name == "parse_config" for c in found.items)
 
 
 def test_stream_is_bounded_not_corpus(tmp_path, monkeypatch):
@@ -54,6 +55,28 @@ def test_stream_is_bounded_not_corpus(tmp_path, monkeypatch):
     rest = list(it)
     assert len(rest) == 19
     assert len(reads) == 20
+
+
+def test_skip_dirs_use_relative_parts(tmp_path):
+    repo = tmp_path / "build" / "proj"
+    repo.mkdir(parents=True)
+    (repo / "ok.py").write_text("def ok():\n    return 1\n")
+    (repo / "build").mkdir()
+    (repo / "build" / "gen.py").write_text("def gen():\n    return 2\n")
+    out = tmp_path / "out"
+    index_repo(repo, out, _engine(ScriptedTransport()), Budget.default())
+    data = json.loads((out / "graph.json").read_text())
+    names = {n["name"] for n in data["nodes"]}
+    assert "ok" in names
+    assert "gen" not in names
+
+
+def test_empty_repo_does_not_publish(tmp_path):
+    out = tmp_path / "out"
+    index_repo(tmp_path, out, _engine(ScriptedTransport()), Budget.default())
+    assert not (out / "graph.json").exists()
+    report = (out / "INDEX_REPORT.md").read_text().lower()
+    assert "abort" in report
 
 
 def test_file_cap_aborts(tmp_path):
@@ -158,3 +181,28 @@ def test_report_accounts_requests_retries_usage(tmp_path):
     assert "0.000013" in report or "cost" in report.lower()
     assert "rss" in report.lower()
     assert "request" in report.lower()
+
+
+def test_role_cannot_reclassify_extractor_kind():
+    from s1_graphify.engine import CandidateJudgment, Judgments, ZERO_USAGE
+    from s1_graphify.extract import Candidate, CandidateId, CandidateSet, SourceLoc
+    from s1_graphify.graph import FileFacts, GraphDocument
+
+    cid = CandidateId("call:pkg/user.py:parse_config:4")
+    cand = Candidate(
+        cid,
+        "call",
+        "parse_config",
+        SourceLoc("pkg/user.py", 4, 4),
+        {"src": "symbol:pkg/user.py:load_user:3", "dst": "name:parse_config"},
+    )
+    judged = CandidateJudgment(cid, True, 0.9, 2.0, 0.8, "symbol")
+    doc = GraphDocument.from_facts(
+        [FileFacts("pkg/user.py", CandidateSet("pkg/user.py", (cand,)), Judgments((judged,), ZERO_USAGE))],
+        commit="abc",
+        endpoint="https://example",
+        model="typesafe/jev-1.13",
+    )
+    assert doc.nodes == ()
+    assert len(doc.edges) == 1
+    assert doc.edges[0].kind == "call"
