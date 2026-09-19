@@ -21,12 +21,22 @@ def main() -> int:
     source = SourceText("pkg/config.py", text, len(text.encode()))
     cset = extract_candidates(source)
     engine = DecisionsEngine.from_env()
+    last_status = {"value": None}
+    orig = engine.transport
+
+    def wrapped(url, data, headers, timeout):
+        status, payload = orig(url, data, headers, timeout)
+        last_status["value"] = status
+        return status, payload
+
+    engine.transport = wrapped
     started = time.perf_counter()
     judged = engine.judge(cset, budget=Budget.default())
     latency_ms = (time.perf_counter() - started) * 1000
     payload = {
         "model": engine.config.model,
         "endpoint": engine.config.url,
+        "http_status": last_status["value"],
         "latency_ms": round(latency_ms, 2),
         "requests": judged.usage.requests,
         "retries": judged.usage.retries,
