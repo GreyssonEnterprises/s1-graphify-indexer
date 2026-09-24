@@ -26,7 +26,7 @@ def _engine(transport) -> DecisionsEngine:
 
 def test_extract_does_not_invent_files():
     text = (TOY / "pkg" / "user.py").read_text()
-    source = SourceText(path="pkg/user.py", text=text, size_bytes=len(text.encode()))
+    source = SourceText(path="pkg/user.py", text=text, size_bytes=len(text.encode()), content_sha256="")
     found = extract_candidates(source)
     assert all(c.loc.path == "pkg/user.py" for c in found.items)
     file_paths = {c.loc.path for c in found.items if c.kind == "file"}
@@ -227,6 +227,64 @@ def test_checkpoint_resume_skips_done_paths(tmp_path):
     assert "one.py" not in resumed
     assert "two.py" in resumed
     assert first_calls >= 1
+
+
+def test_checkpoint_repo_mismatch_does_not_resume_or_clobber(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "one.py").write_text("def one():\n    return 1\n")
+    other = tmp_path / "other-repo"
+    other.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    payload = {
+        "repo": str(other),
+        "commit": "unknown",
+        "facts": [
+            {
+                "path": "one.py",
+                "candidates": [],
+                "judgments": {"items": [], "usage": {}},
+            }
+        ],
+        "file_hashes": {"one.py": "deadbeef"},
+    }
+    ckpt = out / "checkpoint.json"
+    original = json.dumps(payload)
+    ckpt.write_text(original)
+    t = ScriptedTransport()
+    ok = index_repo(repo, out, _engine(t), Budget.default())
+    assert ok is False
+    assert t.calls == []
+    assert ckpt.read_text() == original
+    report = (out / "INDEX_REPORT.md").read_text()
+    assert "identity" in report
+    assert "fresh output directory" in report.lower()
+
+
+def test_checkpoint_resume_rejudges_changed_file(tmp_path):
+    (tmp_path / "one.py").write_text("def one():\n    return 1\n")
+    (tmp_path / "two.py").write_text("def two():\n    return 2\n")
+    out = tmp_path / "out"
+
+    class Counting(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            body = json.loads(data.decode() if isinstance(data, bytes) else data)
+            blob = json.dumps(body.get("state"))
+            if "def two" in blob or "two.py" in blob:
+                raise TimeoutError("stop on two")
+            return super().__call__(url, data, headers, timeout)
+
+    index_repo(tmp_path, out, _engine(Counting()), Budget.default())
+    assert (out / "checkpoint.json").exists()
+    (tmp_path / "one.py").write_text("def one():\n    return 99\n")
+
+    t2 = ScriptedTransport()
+    index_repo(tmp_path, out, _engine(t2), Budget.default())
+    resumed = json.dumps([c["body"] for c in t2.calls])
+    assert "one.py" in resumed
+    assert "return 99" in resumed
+    assert "two.py" in resumed
 
 
 def test_report_write_is_atomic(tmp_path, monkeypatch):

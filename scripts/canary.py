@@ -18,7 +18,7 @@ def main() -> int:
         print("SKIP: OPENROUTER_API_KEY not set", file=sys.stderr)
         return 2
     text = TOY.read_text()
-    source = SourceText("pkg/config.py", text, len(text.encode()))
+    source = SourceText("pkg/config.py", text, len(text.encode()), "")
     cset = extract_candidates(source)
     engine = DecisionsEngine.from_env()
     last_status = {"value": None}

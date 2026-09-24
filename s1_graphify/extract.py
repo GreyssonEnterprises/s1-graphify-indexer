@@ -33,6 +33,7 @@ class SourceText:
     path: str
     text: str
     size_bytes: int
+    content_sha256: str = ""
 
 
 @dataclass(frozen=True)

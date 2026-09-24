@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
 from s1_graphify.graph import FileFacts
 
-AbortReason = Literal["rss", "budget", "http", "malformed", "missing_key", "timeout"]
+AbortReason = Literal["rss", "budget", "http", "malformed", "missing_key", "timeout", "identity"]
 
 
 @dataclass(frozen=True)
@@ -17,11 +17,16 @@ class AbortDetail:
     message: str
 
 
+class CheckpointIdentityError(Exception):
+    pass
+
+
 @dataclass
 class Checkpoint:
     repo: str
     commit: str
     facts: tuple[FileFacts, ...]
+    file_hashes: dict[str, str] = field(default_factory=dict)
 
     def paths_done(self) -> frozenset[str]:
         return frozenset(f.path for f in self.facts)
@@ -31,6 +36,7 @@ class Checkpoint:
             "repo": self.repo,
             "commit": self.commit,
             "facts": [f.to_dict() for f in self.facts],
+            "file_hashes": dict(self.file_hashes),
         })
         _atomic_write(path, payload)
 
@@ -41,7 +47,11 @@ class Checkpoint:
             return None
         data = json.loads(path.read_text())
         facts = tuple(FileFacts.from_dict(f) for f in data.get("facts") or [])
-        return Checkpoint(data.get("repo") or "", data.get("commit") or "", facts)
+        raw_hashes = data.get("file_hashes") or {}
+        if not isinstance(raw_hashes, dict):
+            raw_hashes = {}
+        file_hashes = {str(k): str(v) for k, v in raw_hashes.items()}
+        return Checkpoint(data.get("repo") or "", data.get("commit") or "", facts, file_hashes)
 
 
 @dataclass

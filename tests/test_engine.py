@@ -153,7 +153,7 @@ def test_state_cap_counts_serialized_payload_not_candidate_lines():
     from s1_graphify.extract import SourceText, extract_candidates
 
     text = "def parse_config(path):\n    return path\n" + ("# pad\n" * 400)
-    source = SourceText("pkg/config.py", text, len(text.encode()))
+    source = SourceText("pkg/config.py", text, len(text.encode()), "")
     cset = extract_candidates(source)
     t = ScriptedTransport()
     budget = Budget.default()
@@ -169,7 +169,7 @@ def test_chunks_are_windows_not_whole_file():
     from s1_graphify.extract import SourceText, extract_candidates
 
     text = "def parse_config(path):\n    return path\n" + ("# tail\n" * 3000)
-    source = SourceText("pkg/config.py", text, len(text.encode()))
+    source = SourceText("pkg/config.py", text, len(text.encode()), "")
     cset = extract_candidates(source)
     t = ScriptedTransport()
     budget = Budget.default()

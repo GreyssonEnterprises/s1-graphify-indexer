@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import time
@@ -16,7 +17,13 @@ from s1_graphify.engine import (
 )
 from s1_graphify.extract import extract_candidates
 from s1_graphify.graph import FileFacts, GraphDocument
-from s1_graphify.report import AbortDetail, Checkpoint, IndexReport, percentile
+from s1_graphify.report import (
+    AbortDetail,
+    Checkpoint,
+    CheckpointIdentityError,
+    IndexReport,
+    percentile,
+)
 from s1_graphify.rss import rss_bytes
 from s1_graphify.stream import stream_sources
 
@@ -28,7 +35,43 @@ def _commit(repo: Path) -> str:
     return "unknown"
 
 
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _require_checkpoint_identity(repo: Path, ckpt: Checkpoint) -> None:
+    repo_resolved = repo.resolve()
+    if ckpt.repo and Path(ckpt.repo).resolve() != repo_resolved:
+        raise CheckpointIdentityError(
+            f"checkpoint was written for {ckpt.repo}, not {repo_resolved}; use a fresh output directory"
+        )
+    current = _commit(repo)
+    if ckpt.commit and ckpt.commit != current:
+        raise CheckpointIdentityError(
+            f"checkpoint commit {ckpt.commit} does not match {current}; use a fresh output directory"
+        )
+
+
+def _resumable(repo: Path, ckpt: Checkpoint) -> tuple[list[FileFacts], dict[str, str]]:
+    facts: list[FileFacts] = []
+    hashes: dict[str, str] = {}
+    for fact in ckpt.facts:
+        stored = ckpt.file_hashes.get(fact.path)
+        if not stored:
+            continue
+        digest = _file_sha256(repo / fact.path)
+        if digest != stored:
+            continue
+        facts.append(fact)
+        hashes[fact.path] = stored
+    return facts, hashes
+
+
 def _abort_reason(exc: BaseException) -> AbortDetail:
+    if isinstance(exc, CheckpointIdentityError):
+        return AbortDetail("identity", str(exc))
     if isinstance(exc, BudgetExceeded):
         reason = "rss" if exc.kind == "rss" else "budget"
         return AbortDetail(reason, str(exc))
@@ -62,8 +105,9 @@ def index_repo(
 
     ckpt_path = out / "checkpoint.json"
     ckpt = Checkpoint.load(ckpt_path)
-    facts: list[FileFacts] = list(ckpt.facts) if ckpt else []
-    done = {f.path for f in facts}
+    facts: list[FileFacts] = []
+    file_hashes: dict[str, str] = {}
+    done: set[str] = set()
     abort: AbortDetail | None = None
     request_count = 0
     retries = 0
@@ -72,6 +116,10 @@ def index_repo(
     latencies: list[float] = []
     files = 0
     try:
+        if ckpt is not None:
+            _require_checkpoint_identity(repo, ckpt)
+            facts, file_hashes = _resumable(repo, ckpt)
+            done = {f.path for f in facts}
         budget.check_rss(reader)
         for source in stream_sources(
             repo,
@@ -91,10 +139,12 @@ def index_repo(
             if judged.usage.cost is not None:
                 cost = (cost or 0.0) + float(judged.usage.cost)
             facts.append(FileFacts(source.path, cset, judged))
-            Checkpoint(str(repo), _commit(repo), tuple(facts)).save_atomic(ckpt_path)
+            if source.content_sha256:
+                file_hashes[source.path] = source.content_sha256
+            Checkpoint(str(repo), _commit(repo), tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
         if not facts:
             abort = AbortDetail("budget", "no source files judged")
-            Checkpoint(str(repo), _commit(repo), tuple(facts)).save_atomic(ckpt_path)
+            Checkpoint(str(repo), _commit(repo), tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
         else:
             doc = GraphDocument.from_facts(
                 facts,
@@ -106,6 +156,8 @@ def index_repo(
             doc.publish_atomic(out)
             if ckpt_path.exists():
                 ckpt_path.unlink()
+    except CheckpointIdentityError as exc:
+        abort = _abort_reason(exc)
     except (
         BudgetExceeded,
         EngineHttpError,
@@ -115,7 +167,7 @@ def index_repo(
         MissingKeyError,
     ) as exc:
         abort = _abort_reason(exc)
-        Checkpoint(str(repo), _commit(repo), tuple(facts)).save_atomic(ckpt_path)
+        Checkpoint(str(repo), _commit(repo), tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
         if graph_path.exists():
             graph_path.unlink()
     IndexReport(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 from collections.abc import Callable, Iterator
@@ -64,13 +65,14 @@ def stream_sources(
         data = path.read_bytes()
         if b"\0" in data[:8192]:
             continue
+        digest = hashlib.sha256(data).hexdigest()
         text = data.decode("utf-8", errors="replace")
         max_c = max(1, budget.max_chunk_chars)
         n = max(1, (len(text) + max_c - 1) // max_c)
         for i in range(n):
             piece_len = min(max_c, len(text) - i * max_c)
             budget.charge_chunks(1, piece_len)
-        yield SourceText(rel, text, size)
+        yield SourceText(rel, text, size, digest)
 
 
 def _iter_paths(repo: Path) -> Iterator[Path]:

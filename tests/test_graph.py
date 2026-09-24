@@ -83,7 +83,7 @@ def test_from_facts_dedupes_identical_edge_ids():
 
 
 def test_extract_repeated_calls_mint_unique_ids():
-    source = SourceText("a.py", "foo()\nfoo(); foo()\n", 20)
+    source = SourceText("a.py", "foo()\nfoo(); foo()\n", 20, "")
     cset = extract_candidates(source)
     call_ids = [c.id.value for c in cset.items if c.kind == "call"]
     rel_ids = [c.id.value for c in cset.items if c.kind == "relation"]
@@ -101,7 +101,7 @@ def test_extract_typescript_symbols():
         "  parseArgs(argv);\n"
         "}\n"
     )
-    cset = extract_candidates(SourceText("src/cli.ts", text, len(text)))
+    cset = extract_candidates(SourceText("src/cli.ts", text, len(text), ""))
     names = {c.name for c in cset.items}
     assert "createCli" in names
     assert any(c.kind == "file" and c.loc.path == "src/cli.ts" for c in cset.items)
