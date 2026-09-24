@@ -71,8 +71,39 @@ def test_query_cli_mocked(tmp_path, capsys):
     path.write_text(json.dumps(graph))
     rc = main(["query", "where is parse_config defined?", "--graph", str(path)])
     assert rc == 0
-    captured = capsys.readouterr().out
-    assert "parse_config" in captured
+    captured = capsys.readouterr()
+    assert "parse_config" in captured.out
+    assert captured.err == ""
+
+
+def test_query_cli_empty_prints_no_matches(tmp_path, capsys):
+    graph = {
+        "status": "complete",
+        "commit": "abc",
+        "endpoint": "https://example",
+        "model": "typesafe/jev-1.13",
+        "nodes": [{
+            "id": "symbol:pkg/config.py:parse_config:1",
+            "kind": "symbol",
+            "name": "parse_config",
+            "path": "pkg/config.py",
+            "start_line": 1,
+            "end_line": 2,
+            "confidence": 0.8,
+            "provenance": {
+                "extractor": "stdlib_regex",
+                "judged_by": "typesafe/jev-1.13",
+            },
+        }],
+        "edges": [],
+    }
+    path = tmp_path / "graph.json"
+    path.write_text(json.dumps(graph))
+    rc = main(["query", "where is missing_symbol defined?", "--graph", str(path)])
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no matches" in captured.err
 
 
 def test_benchmark_cli_mocked(tmp_path, monkeypatch):

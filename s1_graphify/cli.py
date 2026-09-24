@@ -53,6 +53,8 @@ def _dispatch(args: argparse.Namespace) -> int:
             args.question, Path(args.graph), engine=engine, rerank=args.rerank
         )
         hits = result.hits if isinstance(result, RankedHits) else result
+        if not hits:
+            print("no matches", file=sys.stderr)
         for h in hits:
             print(f"{h.name}\t{h.loc.path}:{h.loc.start_line}\t{h.score}")
         if isinstance(result, RankedHits):
