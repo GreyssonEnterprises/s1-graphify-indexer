@@ -473,3 +473,14 @@ def test_benchmark_requires_every_expected_name(tmp_path, monkeypatch):
     assert data["match"] == "all"
     assert data["questions"][0]["hit"] is True
     assert data["questions"][1]["hit"] is False
+
+
+def test_benchmark_abort_does_not_load_graph(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"repo": str(repo), "questions": [{"question": "x", "expect_names": ["y"]}]}))
+    ok = benchmark_manifest(manifest, _engine(ScriptedTransport()), Budget.default())
+    assert ok is False
+    assert not (tmp_path / "benchmark_metrics.json").exists()

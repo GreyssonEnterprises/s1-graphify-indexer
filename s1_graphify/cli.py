@@ -61,8 +61,8 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.cmd == "benchmark":
         engine = _engine(args)
         budget = _budget(args)
-        benchmark_manifest(Path(args.manifest), engine, budget)
-        return 0
+        ok = benchmark_manifest(Path(args.manifest), engine, budget)
+        return 0 if ok else 1
     return 2
 
 

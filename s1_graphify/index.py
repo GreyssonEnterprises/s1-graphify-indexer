@@ -186,13 +186,14 @@ def index_repo(
     return abort is None
 
 
-def benchmark_manifest(manifest_path: Path, engine: DecisionsEngine, budget: Budget) -> None:
+def benchmark_manifest(manifest_path: Path, engine: DecisionsEngine, budget: Budget) -> bool:
     from s1_graphify.query import retrieve
 
     manifest = json.loads(Path(manifest_path).read_text())
     repo = Path(manifest["repo"])
     out = Path("benchmark_out")
-    index_repo(repo, out, engine, budget)
+    if not index_repo(repo, out, engine, budget):
+        return False
     graph = GraphDocument.load(out / "graph.json")
     results = []
     for item in manifest.get("questions") or []:
@@ -208,3 +209,4 @@ def benchmark_manifest(manifest_path: Path, engine: DecisionsEngine, budget: Bud
     Path("benchmark_metrics.json").write_text(
         json.dumps({"match": "all", "questions": results}, indent=2)
     )
+    return True

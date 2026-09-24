@@ -101,3 +101,15 @@ def test_benchmark_cli_mocked(tmp_path, monkeypatch):
     assert results.exists()
     data = json.loads(results.read_text())
     assert data["questions"]
+
+
+def test_benchmark_cli_abort_is_nonzero(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.chdir(tmp_path)
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"repo": str(repo), "questions": []}))
+    rc = main(["benchmark", str(manifest)])
+    assert rc == 1
+    assert not (tmp_path / "benchmark_metrics.json").exists()
