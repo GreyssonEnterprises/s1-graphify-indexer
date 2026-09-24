@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -347,3 +348,44 @@ def test_role_cannot_reclassify_extractor_kind():
     assert not any(n.id == cid for n in doc.nodes)
     assert len(doc.edges) == 1
     assert doc.edges[0].kind == "call"
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+
+
+def test_source_symlink_outside_repo_is_not_read(tmp_path):
+    marker = "OUTSIDE_MARKER_s1_issue7"
+    outside = tmp_path / "outside" / "secret.txt"
+    outside.parent.mkdir()
+    outside.write_text(f"# {marker}\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "ok.py").write_text("def ok():\n    return 1\n")
+    (repo / "leak.py").symlink_to(outside)
+
+    def yielded_text() -> str:
+        sources = list(stream_sources(repo, Budget.default()))
+        paths = {s.path for s in sources}
+        blob = "\n".join(s.text for s in sources)
+        assert marker not in blob
+        assert paths == {"ok.py"}
+        return blob
+
+    yielded_text()
+
+    def transport_body(repo_out: Path) -> bytes:
+        transport = ScriptedTransport()
+        index_repo(repo, repo_out, _engine(transport), Budget.default())
+        chunks: list[bytes] = []
+        for call in transport.calls:
+            data = call["data"]
+            chunks.append(data if isinstance(data, (bytes, bytearray)) else str(data).encode())
+        return b"".join(chunks)
+
+    assert marker.encode() not in transport_body(tmp_path / "out")
+
+    _git(repo, "init")
+    _git(repo, "add", "--", "leak.py", "ok.py")
+    assert marker not in yielded_text()
+    assert marker.encode() not in transport_body(tmp_path / "out-git")

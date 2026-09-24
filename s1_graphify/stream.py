@@ -54,6 +54,11 @@ def stream_sources(
             continue
         if path.suffix.lower() not in SOURCE_EXT:
             continue
+        if path.is_symlink():
+            continue
+        resolved = path.resolve()
+        if not resolved.is_relative_to(repo.resolve()):
+            continue
         size = path.stat().st_size
         budget.charge_file(size)
         data = path.read_bytes()
