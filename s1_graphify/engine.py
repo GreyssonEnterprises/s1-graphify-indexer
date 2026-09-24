@@ -95,15 +95,33 @@ class RankedHits:
     usage: Usage
 
 
+# Success and error bodies are capped so a bad endpoint cannot allocate past the RSS budget.
+# One extra byte is read only to detect overflow.
+MAX_RESPONSE_BYTES = 1_048_576
+
+
+def read_bounded_response(source, limit: int = MAX_RESPONSE_BYTES) -> bytes:
+    read = source.read if hasattr(source, "read") else source
+    try:
+        raw = read(limit + 1)
+    except TypeError:
+        raw = read()
+    if not raw:
+        return b""
+    if len(raw) > limit:
+        raise MalformedResponseError(f"response body exceeds {limit} bytes")
+    return raw
+
+
 def urllib_transport(url: str, data: bytes, headers: dict[str, str], timeout: float):
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
+            raw = read_bounded_response(resp)
             status = getattr(resp, "status", 200)
             return status, json.loads(raw.decode())
     except urllib.error.HTTPError as e:
-        raw = e.read() if e.fp else b""
+        raw = read_bounded_response(e) if e.fp else b""
         try:
             parsed = json.loads(raw.decode()) if raw else {}
         except json.JSONDecodeError:

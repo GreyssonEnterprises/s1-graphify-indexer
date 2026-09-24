@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
+from unittest.mock import patch
 
 import pytest
 
@@ -233,3 +236,99 @@ def test_concurrency_runs_batches_in_parallel():
     engine.judge(_many_symbols(8), budget=budget)
     assert len(t.calls) >= 2
     assert peak["n"] >= 2
+
+
+def _json_of_size(n: int) -> bytes:
+    prefix = b'{"p":"'
+    suffix = b'"}'
+    pad = n - len(prefix) - len(suffix)
+    assert pad >= 0
+    return prefix + (b"a" * pad) + suffix
+
+
+class _StubUrlOpen:
+    def __init__(self, payload: bytes, *, status: int = 200, http_error: int | None = None):
+        self.payload = payload
+        self.status = status
+        self.http_error = http_error
+
+    def __call__(self, req, timeout=None):
+        body = self.payload
+        status = self.status
+
+        class Resp:
+            def read(self, amt=-1):
+                return body
+
+            def __enter__(self):
+                self.status = status
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        Resp.status = status
+
+        if self.http_error is not None:
+            raise urllib.error.HTTPError(
+                "https://example.test/v1/decide",
+                self.http_error,
+                "Bad Request",
+                None,
+                io.BytesIO(self.payload),
+            )
+        return Resp()
+
+
+def _max_response_bytes() -> int:
+    import s1_graphify.engine as engine
+
+    return getattr(engine, "MAX_RESPONSE_BYTES", 1_048_576)
+
+
+def test_urllib_transport_rejects_oversized_success_body():
+    from s1_graphify.engine import urllib_transport
+
+    MAX_RESPONSE_BYTES = _max_response_bytes()
+
+    payload = _json_of_size(MAX_RESPONSE_BYTES + 2)
+    assert len(payload) > MAX_RESPONSE_BYTES + 1
+    fake = _StubUrlOpen(payload)
+    with patch("urllib.request.urlopen", fake):
+        with pytest.raises(MalformedResponseError):
+            urllib_transport("https://example.test/v1/decide", b"{}", {}, 1.0)
+
+
+def test_urllib_transport_rejects_oversized_http_error_body():
+    from s1_graphify.engine import urllib_transport
+
+    MAX_RESPONSE_BYTES = _max_response_bytes()
+
+    payload = _json_of_size(MAX_RESPONSE_BYTES + 2)
+    fake = _StubUrlOpen(payload, http_error=400)
+    with patch("urllib.request.urlopen", fake):
+        with pytest.raises(MalformedResponseError):
+            urllib_transport("https://example.test/v1/decide", b"{}", {}, 1.0)
+
+
+def test_bounded_reader_rejects_oversized_error_body():
+    from s1_graphify.engine import MAX_RESPONSE_BYTES, read_bounded_response
+
+    payload = _json_of_size(MAX_RESPONSE_BYTES + 2)
+    with pytest.raises(MalformedResponseError):
+        read_bounded_response(io.BytesIO(payload))
+
+
+def test_urllib_transport_parses_exact_max_json():
+    from s1_graphify.engine import urllib_transport
+
+    MAX_RESPONSE_BYTES = _max_response_bytes()
+
+    payload = _json_of_size(MAX_RESPONSE_BYTES)
+    assert len(payload) == MAX_RESPONSE_BYTES
+    fake = _StubUrlOpen(payload)
+    with patch("urllib.request.urlopen", fake):
+        status, parsed = urllib_transport("https://example.test/v1/decide", b"{}", {}, 1.0)
+    assert status == 200
+    assert isinstance(parsed, dict)
+    assert parsed["p"].startswith("a")
