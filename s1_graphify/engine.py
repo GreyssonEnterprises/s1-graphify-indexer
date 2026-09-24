@@ -319,20 +319,21 @@ class DecisionsEngine:
     ) -> list[tuple[tuple[Candidate, ...], list, dict]]:
         batches: list[tuple[tuple[Candidate, ...], list, dict]] = []
         current: list[Candidate] = []
+        lines = _source_lines(source) if source is not None else None
         for c in candidates.items:
             trial = current + [c]
-            chunks = _windows_for(trial, source, budget.max_chunk_chars)
+            chunks = _windows_for(trial, source, budget.max_chunk_chars, lines)
             questions = _questions_for(trial)
             sz = _payload_chars(self.config.model, trial, chunks, questions)
             if sz > budget.max_state_chars:
                 if not current:
                     raise BudgetExceeded("state", f"{sz} > {budget.max_state_chars}")
-                packed = _windows_for(current, source, budget.max_chunk_chars)
+                packed = _windows_for(current, source, budget.max_chunk_chars, lines)
                 packed_q = _questions_for(current)
                 budget.charge_state(_payload_chars(self.config.model, current, packed, packed_q))
                 batches.append((tuple(current), packed, packed_q))
                 current = [c]
-                chunks = _windows_for(current, source, budget.max_chunk_chars)
+                chunks = _windows_for(current, source, budget.max_chunk_chars, lines)
                 questions = _questions_for(current)
                 sz = _payload_chars(self.config.model, current, chunks, questions)
                 if sz > budget.max_state_chars:
@@ -340,7 +341,7 @@ class DecisionsEngine:
             else:
                 current = trial
         if current:
-            chunks = _windows_for(current, source, budget.max_chunk_chars)
+            chunks = _windows_for(current, source, budget.max_chunk_chars, lines)
             questions = _questions_for(current)
             budget.charge_state(_payload_chars(self.config.model, current, chunks, questions))
             batches.append((tuple(current), chunks, questions))
@@ -408,17 +409,23 @@ def _payload_chars(model: str, batch: Sequence[Candidate], chunks: list, questio
     }))
 
 
+def _source_lines(source: SourceText) -> list[str]:
+    return source.text.splitlines() or [""]
+
+
 def _windows_for(
     batch: Sequence[Candidate],
     source: SourceText | None,
     max_chars: int,
+    lines: list[str] | None = None,
 ) -> list:
     if source is None:
         return [
             {"path": c.loc.path, "start_line": c.loc.start_line, "text": _candidate_line(c)}
             for c in batch
         ]
-    lines = source.text.splitlines() or [""]
+    if lines is None:
+        lines = _source_lines(source)
     spans: list[tuple[int, int]] = []
     for c in batch:
         if c.kind == "file":

@@ -332,3 +332,29 @@ def test_urllib_transport_parses_exact_max_json():
     assert status == 200
     assert isinstance(parsed, dict)
     assert parsed["p"].startswith("a")
+
+
+def test_pack_splits_source_lines_once(monkeypatch):
+    import s1_graphify.engine as eng
+    from s1_graphify.extract import SourceText, extract_candidates
+
+    text = "\n".join(f"def sym_{i}():\n    return {i}\n" for i in range(30))
+    source = SourceText("pkg/dense.py", text, len(text.encode()))
+    cset = extract_candidates(source)
+    calls = {"n": 0}
+    real = eng._source_lines
+
+    def spy(src):
+        calls["n"] += 1
+        return real(src)
+
+    monkeypatch.setattr(eng, "_source_lines", spy)
+    budget = Budget.default()
+    budget.max_state_chars = 24_000
+    engine = _engine(ScriptedTransport())
+    first = engine._pack(cset, budget=Budget.default(), source=source)
+    assert calls["n"] == 1
+    calls["n"] = 0
+    second = engine._pack(cset, budget=budget, source=source)
+    assert calls["n"] == 1
+    assert first == second
