@@ -46,6 +46,21 @@ def test_index_cli_mocked(tmp_path, monkeypatch):
     assert fake.calls >= 1
 
 
+def test_index_abort_names_report_and_checkpoint(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    out = tmp_path / "out"
+    rc = main(["index", str(repo), "--out", str(out)])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert str(out / "INDEX_REPORT.md") in err
+    assert str(out / "checkpoint.json") in err
+    assert "abort" in err.lower()
+    assert (out / "INDEX_REPORT.md").exists()
+    assert (out / "checkpoint.json").exists()
+
+
 def test_query_cli_mocked(tmp_path, capsys):
     graph = {
         "status": "complete",

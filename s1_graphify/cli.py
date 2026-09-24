@@ -45,8 +45,15 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.cmd == "index":
         engine = _engine(args)
         budget = _budget(args)
-        ok = index_repo(Path(args.repo), Path(args.out), engine, budget)
-        return 0 if ok else 1
+        out = Path(args.out)
+        ok = index_repo(Path(args.repo), out, engine, budget)
+        if not ok:
+            print(
+                f"index aborted; see {out / 'INDEX_REPORT.md'} and {out / 'checkpoint.json'}",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
     if args.cmd == "query":
         engine = _engine(args) if args.rerank else None
         result = query_graph(
