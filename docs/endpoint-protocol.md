@@ -65,7 +65,7 @@ Body:
 
 Candidate ids are minted only by the extractor. Jev judges those ids. It does not invent files or symbols.
 
-Multiple candidates from one or more chunks share a request as long as `state` stays under the configured batch cap, well inside Jev's 32K context.
+Multiple candidates from one or more chunks share a request as long as `state` stays under `S1_MAX_STATE_CHARS`, well inside Jev's 32K context.
 
 ## Response
 

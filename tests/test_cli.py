@@ -159,3 +159,18 @@ def test_benchmark_cli_abort_is_nonzero(tmp_path, monkeypatch):
     rc = main(["benchmark", str(manifest)])
     assert rc == 1
     assert not (tmp_path / "benchmark_metrics.json").exists()
+
+
+def test_max_state_chars_flag_raises_the_request_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    body = "".join(f"    x{i} = {i}\n" for i in range(2500))
+    (repo / "big.py").write_text(f"def big():\n{body}")
+    flags = ["--max-chunk-chars", "40000"]
+
+    with patch("urllib.request.urlopen", _FakeUrlOpen()):
+        assert main(["index", str(repo), "--out", str(tmp_path / "default"), *flags]) == 1
+        assert "> 24000" in (tmp_path / "default" / "INDEX_REPORT.md").read_text()
+        raised = main(["index", str(repo), "--out", str(tmp_path / "raised"), *flags, "--max-state-chars", "60000"])
+    assert raised == 0

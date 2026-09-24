@@ -81,7 +81,6 @@ def _add_engine_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--key-env")
     p.add_argument("--timeout", type=float)
     p.add_argument("--retries", type=int)
-    p.add_argument("--batch-chars", type=int)
     p.add_argument("--concurrency", type=int)
 
 
@@ -101,7 +100,6 @@ def _engine(args: argparse.Namespace) -> DecisionsEngine:
         key_env=args.key_env or base.key_env,
         timeout_s=base.timeout_s if args.timeout is None else args.timeout,
         max_retries=base.max_retries if args.retries is None else args.retries,
-        max_state_chars=base.max_state_chars if args.batch_chars is None else args.batch_chars,
         concurrency=base.concurrency if args.concurrency is None else args.concurrency,
     )
     return DecisionsEngine.from_env(config=cfg)
@@ -109,16 +107,11 @@ def _engine(args: argparse.Namespace) -> DecisionsEngine:
 
 def _budget(args: argparse.Namespace) -> Budget:
     caps = Caps.from_env()
-    state_chars = caps.max_state_chars
-    if getattr(args, "batch_chars", None) is not None:
-        state_chars = args.batch_chars
-    elif getattr(args, "max_state_chars", None) is not None:
-        state_chars = args.max_state_chars
     return Budget(
         max_file_bytes=_or(args, "max_file_bytes", caps.max_file_bytes),
         max_chunk_chars=_or(args, "max_chunk_chars", caps.max_chunk_chars),
         max_chunks=_or(args, "max_chunks", caps.max_chunks),
-        max_state_chars=state_chars,
+        max_state_chars=_or(args, "max_state_chars", caps.max_state_chars),
         max_rss_bytes=_or(args, "max_rss_bytes", caps.max_rss_bytes),
     )
 

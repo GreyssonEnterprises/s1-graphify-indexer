@@ -15,7 +15,6 @@ class EngineConfig:
     key_env: str = "OPENROUTER_API_KEY"
     timeout_s: float = 30.0
     max_retries: int = 3
-    max_state_chars: int = 24_000
     concurrency: int = 4
 
     @staticmethod
@@ -30,7 +29,6 @@ class EngineConfig:
             key_env=env("S1_DECISIONS_KEY_ENV", "OPENROUTER_API_KEY", str),
             timeout_s=env("S1_DECISIONS_TIMEOUT", 30.0, float),
             max_retries=env("S1_DECISIONS_RETRIES", 3, int),
-            max_state_chars=env("S1_DECISIONS_BATCH_CHARS", 24_000, int),
             concurrency=env("S1_DECISIONS_CONCURRENCY", 4, int),
         )
 
