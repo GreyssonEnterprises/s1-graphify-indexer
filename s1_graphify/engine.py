@@ -119,7 +119,11 @@ def urllib_transport(url: str, data: bytes, headers: dict[str, str], timeout: fl
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = read_bounded_response(resp)
             status = getattr(resp, "status", 200)
-            return status, json.loads(raw.decode())
+            try:
+                parsed = json.loads(raw.decode())
+            except json.JSONDecodeError as exc:
+                raise MalformedResponseError("response body is not JSON") from exc
+            return status, parsed
     except urllib.error.HTTPError as e:
         raw = read_bounded_response(e) if e.fp else b""
         try:
@@ -299,9 +303,9 @@ class DecisionsEngine:
                 raw_usage = {}
             cost = raw_usage.get("cost")
             return payload, Usage(
-                input_tokens=int(raw_usage.get("input_tokens") or 0),
-                output_tokens=int(raw_usage.get("output_tokens") or 0),
-                cost=float(cost) if cost is not None else None,
+                input_tokens=_as_int(raw_usage.get("input_tokens")),
+                output_tokens=_as_int(raw_usage.get("output_tokens")),
+                cost=None if cost is None else _as_float(cost),
                 requests=1,
                 retries=retries,
                 latencies_ms=tuple(latencies),
@@ -374,20 +378,34 @@ class DecisionsEngine:
             keep_raw = slots.get("keep") or {}
             strength = slots.get("strength") or {}
             choice = role.get("choice")
-            noul = float(keep_raw["noul"]) if "noul" in keep_raw else 0.0
+            noul = _as_float(keep_raw["noul"]) if "noul" in keep_raw else 0.0
             keep = str(choice) != "drop" if choice is not None else noul >= 0.5
             if "confidence" in role:
-                conf = float(role["confidence"])
+                conf = _as_float(role["confidence"])
             elif "noul" in keep_raw:
                 conf = noul
             else:
                 conf = 0.0
-            salience = float(strength.get("score") or 0.0)
+            salience = _as_float(strength.get("score") or 0.0)
             role_s = str(choice) if isinstance(choice, str) else None
             items.append(
                 CandidateJudgment(known_vals[cid_s], keep, noul, salience, conf, role_s)
             )
         return tuple(items)
+
+
+def _as_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise MalformedResponseError(f"invalid integer: {value!r}") from exc
+
+
+def _as_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise MalformedResponseError(f"invalid number: {value!r}") from exc
 
 
 def _candidate_dict(c: Candidate) -> dict:

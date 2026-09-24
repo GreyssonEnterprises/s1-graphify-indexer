@@ -358,3 +358,36 @@ def test_pack_splits_source_lines_once(monkeypatch):
     second = engine._pack(cset, budget=budget, source=source)
     assert calls["n"] == 1
     assert first == second
+
+
+def test_non_json_success_body_is_malformed():
+    from s1_graphify.engine import urllib_transport
+
+    fake = _StubUrlOpen(b"not-json")
+    with patch("urllib.request.urlopen", fake):
+        with pytest.raises(MalformedResponseError, match="not JSON"):
+            urllib_transport("https://example.test/v1/decide", b"{}", {}, 1.0)
+
+
+def test_invalid_numeric_usage_is_malformed():
+    class Bad(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            status, payload = super().__call__(url, data, headers, timeout)
+            payload["usage"]["cost"] = "nope"
+            return status, payload
+
+    with pytest.raises(MalformedResponseError):
+        _engine(Bad()).judge(_one_symbol(), budget=Budget.default())
+
+
+def test_invalid_noul_is_malformed():
+    class Bad(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            status, payload = super().__call__(url, data, headers, timeout)
+            for key in payload["answers"]:
+                if key.startswith("keep_"):
+                    payload["answers"][key]["noul"] = "bad"
+            return status, payload
+
+    with pytest.raises(MalformedResponseError):
+        _engine(Bad()).judge(_one_symbol(), budget=Budget.default())
