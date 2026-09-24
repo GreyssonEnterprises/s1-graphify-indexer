@@ -20,7 +20,21 @@ python -m s1_graphify index ./path/to/repo --out ./out
 
 On success `./out/graph.json` and `./out/INDEX_REPORT.md` appear. On abort you get the report and a checkpoint. There is no complete `graph.json`.
 
-The indexer streams one file at a time. It never materializes the whole corpus. It skips binaries, generated directories, and its own output files. File size, chunk count, request state, and RSS caps abort the run instead of producing a partial graph.
+The indexer streams one file at a time. It never materializes the whole corpus. It skips binaries, generated directories, symlinks, and its own output files. A path that resolves outside the repository is not read. File size, chunk count, request state, and RSS caps abort the run instead of producing a partial graph.
+
+Extraction is line-oriented regular expressions, not a language parser. It runs on every source suffix the walker accepts, but imports are extracted only for Python and JavaScript or TypeScript. In other languages it can miss symbols or label a definition as a call. Names and spans can be wrong on syntax the patterns do not recognize.
+
+If the selected directory has no `.git`, or `git ls-files` fails, the indexer walks the tree instead of using the git index. That walk can see untracked files.
+
+Judge requests send source text to the configured Decisions URL. For each file that is the first `S1_MAX_CHUNK_CHARS` characters (8000 by default), which is the whole file when the file is smaller, plus a window of two lines on each side of every extracted symbol, import, and call. Nearby windows merge, and each is capped at `S1_MAX_CHUNK_CHARS`, so most of a large file can be sent. Requests also carry each candidate's name, kind, repository-relative path, and line numbers. Treat all of it as leaving the machine. Do not index a repository whose contents must not reach that endpoint.
+
+## Resume and a fresh output directory
+
+A later `index` into the same `--out` resumes when the checkpoint's repository path and git commit match this run. Each resumed file must also still have the same bytes. A changed file is judged again. Files after the last checkpoint are judged again too.
+
+The checkpoint is rewritten every 25 files and whenever a run stops early, including an abort or Ctrl-C. A checkpoint identity mismatch is the exception: that abort leaves the existing checkpoint untouched. If the process is killed, the judgments since the last write are paid for again. Use a new `--out` directory when the repository path or commit does not match, when you want to discard partial judgments, or when the CLI says the checkpoint identity does not match. Do not point two repositories at one output directory.
+
+On abort the CLI prints the paths of `INDEX_REPORT.md` and `checkpoint.json`. An offline query that finds nothing prints `no matches` to stderr and leaves stdout empty.
 
 ## Query
 
@@ -37,7 +51,7 @@ python -m s1_graphify query "where is parse_config defined?" --graph ./out/graph
 python -m s1_graphify benchmark ./tests/fixtures/manifest.json
 ```
 
-Writes `benchmark_metrics.json` in the current directory.
+Writes `benchmark_metrics.json` in the current directory. A question hits only when every name in `expect_names` is in the retrieved list (`"match": "all"`). If indexing aborts, the command exits nonzero and does not write that file.
 
 ## Tests
 
