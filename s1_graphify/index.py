@@ -28,6 +28,10 @@ from s1_graphify.rss import rss_bytes
 from s1_graphify.stream import stream_sources
 
 
+# A killed process re-judges files since the last write; any other exit saves first.
+CHECKPOINT_EVERY = 25
+
+
 def _commit(repo: Path) -> str:
     proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, check=False)
     if proc.returncode == 0:
@@ -115,6 +119,8 @@ def index_repo(
     cost: float | None = None
     latencies: list[float] = []
     files = 0
+    unsaved = False
+    commit = _commit(repo)
     try:
         if ckpt is not None:
             _require_checkpoint_identity(repo, ckpt)
@@ -138,17 +144,20 @@ def index_repo(
             input_tokens += judged.usage.input_tokens
             if judged.usage.cost is not None:
                 cost = (cost or 0.0) + float(judged.usage.cost)
+            unsaved = True
             facts.append(FileFacts(source.path, cset, judged))
             if source.content_sha256:
                 file_hashes[source.path] = source.content_sha256
-            Checkpoint(str(repo), _commit(repo), tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
+            if files % CHECKPOINT_EVERY == 0:
+                Checkpoint(str(repo), commit, tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
+                unsaved = False
         if not facts:
             abort = AbortDetail("budget", "no source files judged")
-            Checkpoint(str(repo), _commit(repo), tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
+            Checkpoint(str(repo), commit, tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
         else:
             doc = GraphDocument.from_facts(
                 facts,
-                commit=_commit(repo),
+                commit=commit,
                 endpoint=engine.config.url,
                 model=engine.config.model,
                 rss_check=lambda: budget.check_rss(reader),
@@ -167,9 +176,13 @@ def index_repo(
         MissingKeyError,
     ) as exc:
         abort = _abort_reason(exc)
-        Checkpoint(str(repo), _commit(repo), tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
+        Checkpoint(str(repo), commit, tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
         if graph_path.exists():
             graph_path.unlink()
+    except BaseException:
+        if unsaved:
+            Checkpoint(str(repo), commit, tuple(facts), dict(file_hashes)).save_atomic(ckpt_path)
+        raise
     IndexReport(
         wall_s=time.perf_counter() - started,
         files=files,

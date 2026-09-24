@@ -10,7 +10,8 @@ from s1_graphify.budget import Budget, BudgetExceeded
 from s1_graphify.config import EngineConfig
 from s1_graphify.engine import DecisionsEngine
 from s1_graphify.extract import SourceText, extract_candidates
-from s1_graphify.index import benchmark_manifest, index_repo
+from s1_graphify.index import CHECKPOINT_EVERY, benchmark_manifest, index_repo
+from s1_graphify.report import Checkpoint
 from s1_graphify.stream import stream_sources
 from tests.conftest import ScriptedTransport, TOY
 
@@ -484,3 +485,68 @@ def test_benchmark_abort_does_not_load_graph(tmp_path, monkeypatch):
     ok = benchmark_manifest(manifest, _engine(ScriptedTransport()), Budget.default())
     assert ok is False
     assert not (tmp_path / "benchmark_metrics.json").exists()
+
+
+def test_checkpoint_rewrites_on_interval_not_every_file(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    count = CHECKPOINT_EVERY + 5
+    for i in range(count):
+        (repo / f"f{i}.py").write_text(f"def f{i}():\n    return {i}\n")
+    saves = {"n": 0}
+    real = Checkpoint.save_atomic
+
+    def spy(self, path):
+        saves["n"] += 1
+        return real(self, path)
+
+    monkeypatch.setattr(Checkpoint, "save_atomic", spy)
+    assert index_repo(repo, tmp_path / "out", _engine(ScriptedTransport()), Budget.default())
+    assert saves["n"] == 1
+    assert saves["n"] < count
+
+
+def test_interrupt_saves_unsaved_judgments(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for i in range(12):
+        (repo / f"f{i:02}.py").write_text(f"def f{i}():\n    return {i}\n")
+
+    class Interrupting(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            if b"f10.py" in data:
+                raise KeyboardInterrupt
+            return super().__call__(url, data, headers, timeout)
+
+    out = tmp_path / "out"
+    with pytest.raises(KeyboardInterrupt):
+        index_repo(repo, out, _engine(Interrupting()), Budget.default())
+    saved = json.loads((out / "checkpoint.json").read_text())
+    assert [f["path"] for f in saved["facts"]] == [f"f{i:02}.py" for i in range(10)]
+
+
+def test_interrupt_before_new_judgments_keeps_checkpoint(tmp_path, monkeypatch):
+    import s1_graphify.index as index_mod
+
+    (tmp_path / "one.py").write_text("def one():\n    return 1\n")
+    (tmp_path / "two.py").write_text("def two():\n    return 2\n")
+    out = tmp_path / "out"
+
+    class StopOnTwo(ScriptedTransport):
+        def __call__(self, url, data, headers, timeout):
+            if b"two.py" in data:
+                raise TimeoutError("stop on two")
+            return super().__call__(url, data, headers, timeout)
+
+    index_repo(tmp_path, out, _engine(StopOnTwo()), Budget.default())
+    ckpt = out / "checkpoint.json"
+    original = ckpt.read_bytes()
+    assert [f["path"] for f in json.loads(original)["facts"]] == ["one.py"]
+
+    def interrupted(repo, ckpt):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(index_mod, "_resumable", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        index_repo(tmp_path, out, _engine(ScriptedTransport()), Budget.default())
+    assert ckpt.read_bytes() == original
