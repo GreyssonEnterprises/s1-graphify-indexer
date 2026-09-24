@@ -10,7 +10,7 @@ from s1_graphify.budget import Budget, BudgetExceeded
 from s1_graphify.config import EngineConfig
 from s1_graphify.engine import DecisionsEngine
 from s1_graphify.extract import SourceText, extract_candidates
-from s1_graphify.index import index_repo
+from s1_graphify.index import benchmark_manifest, index_repo
 from s1_graphify.stream import stream_sources
 from tests.conftest import ScriptedTransport, TOY
 
@@ -447,3 +447,29 @@ def test_source_symlink_outside_repo_is_not_read(tmp_path):
     _git(repo, "add", "--", "leak.py", "ok.py")
     assert marker not in yielded_text()
     assert marker.encode() not in transport_body(tmp_path / "out-git")
+
+
+def test_benchmark_requires_every_expected_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("def parse_config():\n    return 1\n\ndef load_user():\n    return 2\n")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "repo": str(repo),
+        "questions": [
+            {
+                "question": "parse_config load_user",
+                "expect_names": ["parse_config", "load_user"],
+            },
+            {
+                "question": "parse_config load_user",
+                "expect_names": ["parse_config", "missing_symbol"],
+            },
+        ],
+    }))
+    benchmark_manifest(manifest, _engine(ScriptedTransport()), Budget.default())
+    data = json.loads((tmp_path / "benchmark_metrics.json").read_text())
+    assert data["match"] == "all"
+    assert data["questions"][0]["hit"] is True
+    assert data["questions"][1]["hit"] is False

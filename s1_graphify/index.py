@@ -202,6 +202,9 @@ def benchmark_manifest(manifest_path: Path, engine: DecisionsEngine, budget: Bud
             expect = [expect]
         hits = retrieve(graph, q)
         names = [h.name for h in hits]
-        hit = bool(expect) and expect[0] in names
+        expected = list(expect or [])
+        hit = bool(expected) and all(name in names for name in expected)
         results.append({"question": q, "hit": hit, "top": names[:5]})
-    Path("benchmark_metrics.json").write_text(json.dumps({"questions": results}, indent=2))
+    Path("benchmark_metrics.json").write_text(
+        json.dumps({"match": "all", "questions": results}, indent=2)
+    )
